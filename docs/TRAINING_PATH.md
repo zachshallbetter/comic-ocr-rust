@@ -145,16 +145,33 @@ Fixing it at 7 publications is cheap; fixing it at 167 is a migration.
 
 ## Two gaps that block every path
 
-### No vocabulary was exported
+### The vocabulary — partly closed, 2026-08-21
 
-`Generator::from_dir` needs a `WordPieceVocab` to turn token ids into text.
-`models/onnx/` holds three graphs and **no `vocab.txt`**, so the model can run and
-its output cannot be read.
+`Generator::from_dir` needs a `WordPieceVocab` to turn token ids into text. Two
+things have changed since this was written, and the remaining gap is narrower
+and in a different place than recorded here.
 
-This is an opportunity rather than a chore. **Build the vocabulary from our own
-corpus**: a character vocabulary derived from the 3,004 transcriptions is ours,
-is sized to what we actually encounter, and removes the last structural tie to
-someone else's 6,144-token vocabulary.
+**The reference vocabulary was exported.** `models/onnx/vocab.txt` exists
+(24 KB, alongside the three graphs). The reference model can be read end to end.
+Note what it is: that file is the reference checkpoint's own 6,144-token
+vocabulary, so it belongs to running a baseline, not to anything we train.
+
+**The corpus-derived builder now has a caller.** `build_character_vocab` was
+correct and tested from the start and nothing invoked it — seven unit tests over
+a function that had never read a real transcription. `comic-ocr --build-vocab`
+now consumes `schemas/training_pair.json` records and writes `vocab.txt` with a
+provenance report, refusing to emit a file when the corpus is empty, when no
+character clears the frequency floor, or when a `rejected` label appears.
+
+**What is still missing is the corpus, not the builder.** The 3,004
+transcriptions sit in CAS behind `RESOURCE_SIGNING_SECRET`; `asset_chunks`
+carries digests but no bytes. Extraction belongs to the platform compiler that
+holds that secret — Infinite-Verse#855 — not to a workaround here. The consumer
+is ready and has nothing to consume.
+
+A character vocabulary derived from our own corpus remains the goal: it is
+sized to what we actually encounter and removes the last structural tie to
+someone else's vocabulary.
 
 ### The third party's terms are unresolved
 
@@ -170,8 +187,9 @@ such encumbrance.
 
 ## Order of work
 
-1. **Vocabulary** — emit `vocab.txt` on export, and build a corpus-derived
-   character vocabulary. Needed by every path; blocks the wiring.
+1. **Vocabulary** — ~~emit `vocab.txt` on export~~ (done) and ~~build a
+   corpus-derived character vocabulary~~ (builder wired; blocked on the corpus,
+   Infinite-Verse#855). No longer blocks the wiring.
 2. **Wire the generation loop** (Infinite-Verse#842) — against the reference
    graphs, to prove the loop end to end and produce the baseline number. Not to
    ship them.

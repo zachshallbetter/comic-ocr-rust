@@ -1,3 +1,5 @@
+mod vocab_corpus;
+
 use clap::Parser;
 use comic_ocr_core::{OcrEngine, TextDetector};
 use comic_ocr_ort::OrtEngine;
@@ -66,11 +68,53 @@ struct Cli {
     /// Force CPU execution
     #[arg(long, default_value_t = false)]
     force_cpu: bool,
+
+    /// Build a character vocabulary from an exported training corpus
+    #[arg(long, default_value_t = false)]
+    build_vocab: bool,
+
+    /// Corpus of training-pair records: a .jsonl, a .json, or a directory of them
+    #[arg(long)]
+    vocab_corpus: Option<PathBuf>,
+
+    /// Where to write vocab.txt (its report is written alongside)
+    #[arg(long, default_value = "models/vocab/vocab.txt")]
+    vocab_out: PathBuf,
+
+    /// Drop characters seen fewer times than this; a glyph seen once is more
+    /// often a transcription error than a character the model must learn
+    #[arg(long, default_value_t = 2)]
+    vocab_min_frequency: usize,
 }
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
+
+    if cli.build_vocab {
+        let corpus = cli
+            .vocab_corpus
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("--vocab-corpus is required with --build-vocab"))?;
+        let report =
+            vocab_corpus::build_from_corpus(corpus, &cli.vocab_out, cli.vocab_min_frequency)?;
+        println!(
+            "vocab: {} characters admitted of {} distinct ({} dropped below frequency {})",
+            report.vocab.admitted,
+            report.vocab.distinct_characters,
+            report.vocab.dropped_rare,
+            cli.vocab_min_frequency
+        );
+        println!(
+            "corpus: {} records across {} file(s), {} intentional negative(s), {} characters scanned",
+            report.records_used,
+            report.files_read,
+            report.intentional_negatives,
+            report.vocab.characters_scanned
+        );
+        println!("wrote: {}", cli.vocab_out.display());
+        return Ok(());
+    }
 
     let mut target_files: Vec<PathBuf> = Vec::new();
 

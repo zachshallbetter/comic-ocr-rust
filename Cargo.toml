@@ -7,6 +7,7 @@ members = [
     "crates/comic-ocr-runtime",
     "crates/comic-ocr-cli",
     "crates/comic-ocr-py",
+    "crates/comic-ocr-synth",
 ]
 default-members = [
     "crates/comic-ocr-core",
@@ -14,6 +15,7 @@ default-members = [
     "crates/comic-ocr-ort",
     "crates/comic-ocr-runtime",
     "crates/comic-ocr-cli",
+    "crates/comic-ocr-synth",
 ]
 
 [workspace.package]

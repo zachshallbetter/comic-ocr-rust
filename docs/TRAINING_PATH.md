@@ -53,6 +53,138 @@ The label is known **by construction**. There is no detector and no transcriber
 in the chain, so the composed-confidence rule does not apply: `confidence` is
 1.0 because nothing inferred it.
 
+**Status 2026-08-21: the generator exists** (`crates/comic-ocr-synth`), and the
+crops have been checked against the one question that matters — does a model
+that has never seen this generator read them as manga?
+
+Measured with `cargo run -p comic-ocr-synth --example verify_realism`, eight
+real balloon labels rendered vertically and read by the reference model:
+
+| | mean CER |
+| --- | --- |
+| synthetic, clean | **1.25%** |
+| synthetic, degraded (JPEG 63-89, rotation to 0.9 deg, blur to 0.81, noise to 5.7) | **1.25%** |
+| *reference model on real crops above 0.60 confidence* | *2.78%* |
+
+Seven of eight were exact; the single error was a hallucinated trailing `、`.
+
+The crops occupy the right distribution: a model trained on real manga reads
+them without being told they are synthetic.
+
+**What the degradation numbers do NOT show.** I first read "degradation did not
+move the CER" as ranges being too conservative, widened them, and found *heavier*
+degradation scored **better** (0.00%) than clean. The tempting story — that
+clean synthetic renders are unrealistically sharp and blur corrects toward real
+scans — is not supported. `examples/ablate_degradation` isolates each parameter:
+
+| arm | mean CER |
+| --- | --- |
+| none, blur 0.5–1.5, jpeg 30, jpeg 75, rotate 3°, noise 20 | 1.25% |
+| blur 2.0 | 0.00% |
+| blur 3.0 | 4.58% (女川 for 立川, 迷惑 for 迷路) |
+
+Everything ties. The 1.25% is **one label's hallucinated trailing `、`**, which
+blur 2.0 happens to suppress — n=1 on a single quirk. Only blur ≥3.0 causes
+genuine character confusion.
+
+### A paired instrument, because CER could not discriminate
+
+`examples/compare_confidence` renders each of the 13 crop-labelled benchmark
+entries as synthetic text and compares the model's **confidence** against the
+real crop of the same string, at matched scale. Pairing controls for the text,
+so a gap is attributable to the rendering. Confidence has the range CER lacks —
+it is the axis on which real crops separate 2.78% CER from 77.59%.
+
+Measured 2026-08-22 over 11 pairs (2 skipped: the font could not cover the text,
+and the renderer refused rather than drawing notdef boxes):
+
+| | |
+| --- | --- |
+| mean real confidence | 0.869 |
+| mean synthetic confidence | 0.929 |
+| **median delta** | **+0.023** |
+| worst / best delta | −0.206 / +0.791 |
+
+The median is the honest number. The +0.060 mean is dragged by one pair where
+the real crop scores 0.208 — far below the 0.60 line, so it is a genuinely
+unreadable scan — against a trivially clean synthetic render.
+
+**What it caught that CER did not**, and what fixing it revealed:
+
+```
+第30話重苦しい闇の奥  ->  第30回国苦しい国の姿で静かに比較す   (0.655)
+LINK!私達7人の力     ->  LINK!私学人の女子ガノンの学の場      (0.662)
+```
+
+Two pairs came out *worse* than their real counterparts, both at the smallest
+rendered size. Diagnosing that took two attempts, and the first was wrong:
+
+| render model | worst delta | median |
+| --- | --- | --- |
+| one column, direction forced vertical | −0.206 | +0.023 |
+| column count estimated, direction still forced | **−0.339** | +0.036 |
+| column count estimated **and direction inferred** | **+0.002** | +0.036 |
+
+Estimating the column count was the obvious fix — an 11-character balloon is not
+one column, so `height / chars` underestimates glyph size — and on its own it
+made the result **worse**. The actual defect was forcing `VerticalRl` on every
+crop. `LINK!私達7人の力` sits in a crop wider than it is tall; it is *horizontal*
+text, and packing it into ten one-character columns produced something nothing
+like the page. Inferring direction from the crop's aspect ratio took that pair
+from 0.529 to 0.933, and every crop now reads its label.
+
+**The result is a cleaner and less comfortable signal.** With the renderer
+fixed, **all 11 pairs sit above their real counterparts** — worst delta +0.002,
+mean +0.114. There is no longer any pair where synthetic is harder than real.
+The generator produces uniformly easier crops than the pages it is meant to
+prepare a model for, and the composed-confidence weighting in
+[`TRAINING_EXPORT.md`](TRAINING_EXPORT.md) would over-trust them.
+
+### Degradation is not what closes the gap
+
+With a sensitive instrument available, the obvious next move was to tune the
+`ScanQuality` ranges until synthetic difficulty matched real. Measured
+2026-08-22, it does not work:
+
+| | mean confidence |
+| --- | --- |
+| synthetic, clean | 0.983 |
+| synthetic, typical scan | 0.967 |
+| synthetic, **poor** scan (JPEG 22–55, ±4°, blur to 2.2, noise to 22) | 0.957 |
+| **real crops** | **0.869** |
+
+Aggressive scan degradation closes **0.026 of a 0.114 gap — about a fifth** —
+and it does so unevenly: two crops drop sharply (1.000 → 0.849, 0.906 → 0.753)
+while most barely move. Pushing the ranges further would degrade those two into
+noise long before the average reached real difficulty.
+
+**So what makes a real crop hard is not scan quality.** The remaining gap has to
+live in what is still unmodelled:
+
+- **Typography.** These renders use a clean system sans (Hiragino). Real manga is
+  hand-lettered or set in display faces with different weights, proportions and
+  stroke contrast.
+- **Crop context.** Real boxes clip balloon borders, tails, and slivers of
+  adjacent text; these renders sit on flat ground with clean margins.
+- **Ground.** Real balloon interiors carry paper grain, tone bleed from adjacent
+  panels, and uneven ink — not a uniform value with additive noise.
+
+That is the next increment, and it is a redirection: **do not tune the
+degradation ranges further.** They are doing what they can.
+
+Separately, hallucinated continuation survives every rendering fix — `…で静かに
+呼吸づ`, `…でガンの塔の結`, `…人達に!!` all appear after a correctly-read label.
+That is decoder behaviour rather than a rendering flaw, and it is the same
+pattern under investigation in Infinite-Verse#837.
+
+**The CER probe, by contrast, is saturated.** Eight labels the model
+reads essentially perfectly from pristine through jpeg 30, 3° rotation and
+noise 20. It can confirm the crops are legible; it cannot distinguish good
+synthetic data from excellent, and no degradation range can be tuned on it.
+The `ScanQuality` ranges are therefore a starting position drawn from what scans
+plausibly do, and their honest status is **unverified**. Harder material, or far
+more of it, is the next increment — not wider ranges.
+
 Two properties make this the load-bearing stage:
 
 - **It is unlimited and free.** 100k pairs is compute, not a data-collection
